@@ -77,7 +77,7 @@ src/
 |---|---|
 | Total Players Injected | 400,000 |
 | Execution Time | 218.90ms |
-| Peak Throughput | 1,827,348 insertions/sec |
+| Peak Throughput | 11806497 insertions/sec |
 
 **Conclusion:** Moving memory allocation off the OS heap and relying on the LIFO Free List successfully eliminated page faults and cache thrashing. The lock-sharded bucket grid allowed all 8 threads to write simultaneously without triggering global bottlenecks or thread starvation.
 
