@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ClientMessage {
     pub action: String,
