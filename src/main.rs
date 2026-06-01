@@ -47,10 +47,8 @@ async fn main() {
             
             let (mut ws_sender, mut ws_receiver) = ws_stream.split();
             
-            // 1. Create a channel to handle all outgoing messages
             let (tx_out, mut rx_out) = tokio::sync::mpsc::channel::<Message>(100);
 
-            // 2. Spawn a dedicated background task to write to the WebSocket
             tokio::spawn(async move {
                 while let Some(msg) = rx_out.recv().await {
                     if ws_sender.send(msg).await.is_err() {
@@ -59,7 +57,6 @@ async fn main() {
                 }
             });
             
-            // 3. The main read loop is now completely unblocked
             while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
                 if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
                     
@@ -72,8 +69,6 @@ async fn main() {
                             
                             let tx_out_clone = tx_out.clone();
                             
-                            // 4. SPAWN THE WAITER IN THE BACKGROUND
-                            // This allows the read loop to instantly process the next bot!
                             tokio::spawn(async move {
                                 if let Ok(queue_event) = rx.await {
                                     match queue_event {
