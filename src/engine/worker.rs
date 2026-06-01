@@ -1,14 +1,17 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tracing::info;
 
 use super::state::EngineState;
 use super::config::EngineConfig;
+use super::balancer::{create_balanced_match, MatchPlayer, MatchResponse, QueueEvent};
 
 // The LUT is now a dynamically sized Vector stored in static memory
 static DECAY_LUT: OnceLock<Vec<usize>> = OnceLock::new();
+static MATCH_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // generate the look up table at boot time using the TOML configuration
 pub fn initialize_decay_lut(config: &EngineConfig) {
@@ -35,23 +38,56 @@ pub fn get_search_radius(seconds_waited: usize) -> usize {
 
 // periodically increments relaxation levels for waiting players.
 pub async fn spawn_tick_thread(state: Arc<EngineState>) {
+    // EngineConfig does not have `queue_timeout_seconds`; use `max_wait_seconds` as the timeout
+    let timeout_limit = state.config.max_wait_seconds as u8;
+
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
-
         let num_buckets = state.buckets.len();
+
         for i in 0..num_buckets {
-            // fast atomic pre check before locking
             if state.active_counts[i].load(Relaxed) == 0 {
                 continue;
             }
 
-            if let Ok(bucket) = state.buckets[i].try_lock() {
-                if let Some(&index) = bucket.peek_front() {
-                    // lock the arena
-                    if let Ok(arena) = state.arena.lock() {
-                        if let Some(player) = arena.get(index) {
-                            player.relaxation_level.fetch_add(1, Relaxed);
+            if let Ok(mut bucket) = state.buckets[i].try_lock() {
+                let mut timed_out_indices = Vec::new();
+                let len = bucket.len();
+                
+                // Cycle the bucket to update relaxation levels and filter timeouts
+                for _ in 0..len {
+                    if let Some(idx) = bucket.pop() {
+                        let mut is_timed_out = false;
+                        
+                        if let Ok(arena) = state.arena.lock() {
+                            if let Some(player) = arena.get(idx) {
+                                let current_wait = player.relaxation_level.fetch_add(1, Relaxed) + 1;
+                                if current_wait >= timeout_limit {
+                                    is_timed_out = true;
+                                }
+                            }
                         }
+
+                        if is_timed_out {
+                            timed_out_indices.push(idx);
+                        } else {
+                            // Re-insert active players
+                            bucket.push(idx); 
+                        }
+                    }
+                }
+
+                // Process Atomic Evictions
+                if !timed_out_indices.is_empty() {
+                    let mut arena = state.arena.lock().unwrap();
+                    for idx in timed_out_indices {
+                        if let Ok(mut reg_guard) = state.connection_registry[idx].lock() {
+                            if let Some(conn) = reg_guard.take() {
+                                let _ = conn.sender.send(QueueEvent::Timeout);
+                            }
+                        }
+                        arena.free(idx);
+                        state.active_counts[i].fetch_sub(1, Relaxed);
                     }
                 }
             }
@@ -74,7 +110,7 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
 
                 // lock the center bucket to read the relaxation level of the front player 
                 // and determine our look-up radius
-                let (radius, min_bucket, max_bucket) = {
+                let (_radius, min_bucket, max_bucket) = {
                     let bucket = match state.buckets[i].try_lock() {
                         Ok(b) => b,
                         Err(_) => continue,
@@ -127,14 +163,13 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
                     let mut extracted = Vec::with_capacity(10);
                     let mut current_b_idx = min_bucket;
 
-                    // Greedily pop players out of our held buckets until we have 10
                     for guard in guards.iter_mut() {
                         while extracted.len() < 10 {
                             if let Some(idx) = guard.pop() {
                                 extracted.push(idx);
                                 state.active_counts[current_b_idx].fetch_sub(1, Relaxed);
                             } else {
-                                break; // Move to the next bucket
+                                break;
                             }
                         }
                         
@@ -144,13 +179,54 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
                         current_b_idx += 1;
                     }
 
-                    // free the slots and add to free list
-                    let mut arena = state.arena.lock().unwrap();
-                    for &idx in &extracted {
-                        arena.free(idx);
+                    let mut match_players = Vec::with_capacity(10);
+                    let mut active_connections = Vec::with_capacity(10);
+
+                    {
+                        let mut arena = state.arena.lock().unwrap();
+                        for &idx in &extracted {
+                            if let Some(player) = arena.get(idx) {
+                                if let Ok(mut reg_guard) = state.connection_registry[idx].lock() {
+                                    if let Some(conn) = reg_guard.take() {
+                                        match_players.push(MatchPlayer {
+                                            uuid: conn.uuid.clone(),
+                                            mmr: player.mmr,
+                                        });
+                                        active_connections.push(conn);
+                                    }
+                                }
+                            }
+                            arena.free(idx);
+                        }
                     }
 
-                    info!("Match formed with Player Arena Indices: {:?}", extracted);
+                    drop(guards);
+
+                    if match_players.len() == 10 {
+                        let final_match = create_balanced_match(match_players);
+                        let current_match_id = MATCH_ID_COUNTER.fetch_add(1, Relaxed);
+
+                        let payload = MatchResponse {
+                            match_id: current_match_id,
+                            team_a: final_match.team_a.clone(),
+                            team_b: final_match.team_b.clone(),
+                        };
+
+                        for conn in active_connections {
+                            let _ = conn.sender.send(QueueEvent::MatchFound(payload.clone()));
+                        }
+
+                        let team_a_avg = final_match.team_a.iter().map(|p| p.mmr as f64).sum::<f64>() / 5.0;
+                        let team_b_avg = final_match.team_b.iter().map(|p| p.mmr as f64).sum::<f64>() / 5.0;
+                        
+                        info!(
+                            "Match formed! Team A Avg: {:.1}, Team B Avg: {:.1}, Difference: {:.1}",
+                            team_a_avg,
+                            team_b_avg,
+                            (team_a_avg - team_b_avg).abs()
+                        );
+                    }
+
                     matches_formed_this_sweep = true;
                 }
             }
