@@ -12,22 +12,21 @@ A high-performance, multithreaded 5v5 matchmaking engine built in Rust. Designed
 
 ### Prerequisites
 
-* Rust toolchain
+* Rust toolchain (1.70+)
 
 ### Installation
 
 Clone the repository and build the project:
 
 ```bash
-git clone [https://github.com/gvedant666/real-time-competitive-matchmaker](https://github.com/gvedant666/real-time-competitive-matchmaker)
+git clone https://github.com/gvedant666/real-time-competitive-matchmaker.git
 cd real-time-competitive-matchmaker
 cargo build --release
 ```
 
-### Running the Simulation
+## Running the Simulation
 
 This repository includes a standalone, heavy-load simulation suite to benchmark performance and validate edge-case handling. To run the suite:
-Bash
 
 ```bash
 cargo run --release --bin simulate
@@ -35,20 +34,14 @@ cargo run --release --bin simulate
 
 The simulation will execute four sequential tests:
 
-* Bell Curve Test: Injects 50,000 players via a Normal Distribution.
-
-* Uniform Chaos Test: Injects 50,000 players via a purely random distribution.
-
-* Raw CPU Speed Benchmark: Synchronous memory injection to test raw lock/extraction speeds.
-
-* 8-Bucket Gap Test: Validates the asynchronous Tick Thread and LUT decay logic.
-
-
-
+* **Bell Curve Test:** Injects 50,000 players via a Normal Distribution.
+* **Uniform Chaos Test:** Injects 50,000 players via a purely random distribution.
+* **Raw CPU Speed Benchmark:** Synchronous memory injection to test raw lock/extraction speeds.
+* **8-Bucket Gap Test:** Validates the asynchronous Tick Thread and LUT decay logic.
 
 ## Project Structure
-Plaintext
 
+```plaintext
 src/
 ├── api/          # WebSocket / HTTP ingestion layer (Future)
 ├── models/       # Shared DTOs and API models
@@ -60,9 +53,8 @@ src/
 ├── main.rs       # Production Server Entry Point
 └── bin/
     └── simulate.rs   # High-throughput benchmarking suite
+```
 
+## Architecture Deep-Dive
 
-
-# Architecture Deep-Dive
-
-For a comprehensive breakdown of the systems engineering decisions—including deadlock prevention strategies, the LIFO memory arena, and why the asynchronous Tick Thread is used over standard const fn arrays—please read the full Architecture & Design Document.
+For a comprehensive breakdown of the systems engineering decisions—including deadlock prevention strategies, the LIFO memory arena, and why the asynchronous Tick Thread is used over standard `const fn` arrays—please read the full Architecture & Design Document.
