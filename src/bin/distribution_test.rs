@@ -60,7 +60,6 @@ async fn main() {
         if let Ok(Ok(event)) = tokio::time::timeout(timeout_duration, rx).await {
             match event {
                 QueueEvent::MatchFound(response) => {
-                    // Deduplicate because 10 players receive the same match_id
                     if match_ids.insert(response.match_id) {
                         
                         let team_a_mmr: u32 = response.team_a.iter().map(|p| p.mmr as u32).sum();
@@ -69,7 +68,6 @@ async fn main() {
                         let diff = team_a_mmr.abs_diff(team_b_mmr);
                         total_spread += diff;
                         
-                        // Categorize for histogram (0-10, 11-20, etc.)
                         let index = (diff / 10).min(9) as usize;
                         spread_counts[index] += 1;
                     }

@@ -9,7 +9,7 @@ use super::state::EngineState;
 use super::config::EngineConfig;
 use super::balancer::{create_balanced_match, MatchPlayer, MatchResponse, QueueEvent};
 
-// The LUT is now a dynamically sized Vector stored in static memory
+
 static DECAY_LUT: OnceLock<Vec<usize>> = OnceLock::new();
 static MATCH_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -38,7 +38,6 @@ pub fn get_search_radius(seconds_waited: usize) -> usize {
 
 // periodically increments relaxation levels for waiting players.
 pub async fn spawn_tick_thread(state: Arc<EngineState>) {
-    // EngineConfig does not have `queue_timeout_seconds`; use `max_wait_seconds` as the timeout
     let timeout_limit = state.config.max_wait_seconds as u8;
 
     loop {
@@ -54,7 +53,6 @@ pub async fn spawn_tick_thread(state: Arc<EngineState>) {
                 let mut timed_out_indices = Vec::new();
                 let len = bucket.len();
                 
-                // Cycle the bucket to update relaxation levels and filter timeouts
                 for _ in 0..len {
                     if let Some(idx) = bucket.pop() {
                         let mut is_timed_out = false;
@@ -95,7 +93,7 @@ pub async fn spawn_tick_thread(state: Arc<EngineState>) {
     }
 }
 
-/// Matchmaking logic, lock-sharded synchronous sweep loop.
+// Matchmaking logic, lock-sharded synchronous sweep loop.
 pub fn spawn_worker_thread(state: Arc<EngineState>) {
     std::thread::spawn(move || {
         loop {
