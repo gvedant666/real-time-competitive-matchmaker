@@ -1,0 +1,12 @@
+# matchmaker.toml
+min_mmr = 0
+max_mmr = 5000
+bucket_size = 50
+
+# Wait up to 300 seconds, expanding up to 15 buckets away
+max_wait_seconds = 300
+max_expansion_radius = 15
+decay_acceleration = 0.03
+
+# Memory Allocation
+arena_size = 100000

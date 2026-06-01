@@ -1,14 +1,12 @@
 use axum::{routing::get, Router};
+use real_time_competitive_matchmaker::engine::config::EngineConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-mod api;
-mod engine;
-mod models;
-
-use engine::state::EngineState;
-use engine::worker::{spawn_tick_thread, spawn_worker_thread};
+use real_time_competitive_matchmaker::api;
+use real_time_competitive_matchmaker::engine::state::EngineState;
+use real_time_competitive_matchmaker::engine::worker::{spawn_tick_thread, spawn_worker_thread, initialize_decay_lut};
 
 #[tokio::main]
 async fn main() {
@@ -16,13 +14,17 @@ async fn main() {
     tracing_subscriber::fmt::init();
     info!("Starting Matchmaking Server...");
 
-    let engine_state = Arc::new(EngineState::new());
+    let config = EngineConfig::load();
+
+    initialize_decay_lut(&config);
+
+    let engine_state = Arc::new(EngineState::new(config));
 
     tokio::spawn(spawn_tick_thread(engine_state.clone()));
 
     // spawnning 2 threads for now
     // will increase according to the system later
-    for _ in 0..2 {
+    for _ in 0..1 {
         spawn_worker_thread(Arc::clone(&engine_state));
     }
 

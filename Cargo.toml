@@ -10,10 +10,11 @@ axum = { version = "0.7", features = ["ws"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
 serde_json = "1.0"
 
 # Telemetry (Do not use println!)
 tracing = "0.1"
 tracing-subscriber = "0.3"
-rand = "0.10.1"
-rand_distr = "0.6.0"
+rand = "0.8.5"
+rand_distr = "0.4.3"

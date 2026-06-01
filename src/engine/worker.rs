@@ -1,39 +1,45 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use tracing::info;
 
-use super::state::{EngineState, NUM_BUCKETS};
+use super::state::EngineState;
+use super::config::EngineConfig;
 
-// generate the look up table at compile time
-const fn build_decay_lut() -> [usize; 300] {
-    let mut lut = [0; 300];
-    let mut i = 0;
-    while i < 300 {
-        lut[i] = if i <= 5 {
-            0
-        } else if i <= 15 {
-            1
-        } else if i <= 30 {
-            2
-        } else {
-            3
-        };
-        i += 1;
-    }
-    lut
+// The LUT is now a dynamically sized Vector stored in static memory
+static DECAY_LUT: OnceLock<Vec<usize>> = OnceLock::new();
+
+// generate the look up table at boot time using the TOML configuration
+pub fn initialize_decay_lut(config: &EngineConfig) {
+    DECAY_LUT.get_or_init(|| {
+        let mut lut = Vec::with_capacity(config.max_wait_seconds);
+        let max_radius = config.max_expansion_radius as f64;
+        let decay_rate = config.decay_acceleration; 
+        
+        for t in 0..config.max_wait_seconds {
+            // R(t) = R_max * (1 - e^(-k * t))
+            let radius = max_radius * (1.0 - std::f64::consts::E.powf(-decay_rate * (t as f64)));
+            lut.push(radius as usize);
+        }
+        lut
+    });
 }
 
-const DECAY_LUT: [usize; 300] = build_decay_lut();
+#[inline(always)]
+pub fn get_search_radius(seconds_waited: usize) -> usize {
+    let lut = DECAY_LUT.get().expect("Decay LUT was not initialized at boot!");
+    let t = seconds_waited.min(lut.len() - 1);
+    *lut.get(t).unwrap()
+}
 
 // periodically increments relaxation levels for waiting players.
-// relaxation level is the time player wait in matchmaking queue
-// for now, its hardcoded, will think about it later
 pub async fn spawn_tick_thread(state: Arc<EngineState>) {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        for i in 0..NUM_BUCKETS {
+        let num_buckets = state.buckets.len();
+        for i in 0..num_buckets {
             // fast atomic pre check before locking
             if state.active_counts[i].load(Relaxed) == 0 {
                 continue;
@@ -58,10 +64,10 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
     std::thread::spawn(move || {
         loop {
             let mut matches_formed_this_sweep = false;
+            let num_buckets = state.buckets.len();
 
-            for i in 0..NUM_BUCKETS {
+            for i in 0..num_buckets {
                 // atomic pre check fast lookup
-                // skip if bucklet empty to avoid heavy lock
                 if state.active_counts[i].load(Relaxed) == 0 {
                     continue;
                 }
@@ -74,8 +80,6 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
                         Err(_) => continue,
                     };
 
-                    // if another took our player, so need to check bucket empty
-
                     if bucket.is_empty() {
                         continue;
                     }
@@ -87,15 +91,12 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
                         player.relaxation_level.load(Relaxed)
                     };
 
-                    // Cap look-up to prevent out-of-bounds panics
-                    let lut_index = (relaxation as usize).min(299);
-                    let radius = DECAY_LUT[lut_index];
+                    let radius = get_search_radius(relaxation as usize);
 
                     let min_bucket = i.saturating_sub(radius);
-                    let max_bucket = (i + radius).min(NUM_BUCKETS - 1);
+                    let max_bucket = (i + radius).min(num_buckets - 1);
 
-                    // classic deadlock condition
-                    // drop before locking multiple buckets to prevent deadlocks
+                    // classic deadlock condition prevention
                     drop(bucket);
                     (radius, min_bucket, max_bucket)
                 };
@@ -109,7 +110,6 @@ pub fn spawn_worker_thread(state: Arc<EngineState>) {
                         Ok(guard) => guards.push(guard),
                         Err(_) => {
                             // Thread contention detected. Bail out instantly.
-                            // The `guards` Vec drops here, automatically releasing all successfully held locks.
                             lock_failed = true;
                             break;
                         }

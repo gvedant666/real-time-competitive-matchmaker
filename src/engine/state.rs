@@ -2,25 +2,33 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use super::arena::Arena;
 use super::primitives::{Bucket, Player};
-
-pub const NUM_BUCKETS: usize = 100;
-pub const BUCKET_MMR_RANGE: u16 = 50;
-
+use super::config::EngineConfig;
 
 #[derive(Debug)]
 pub struct EngineState {
     pub(crate) arena: Mutex<Arena>,
-    pub(crate) buckets: [Mutex<Bucket>; NUM_BUCKETS],
-    pub active_counts: [AtomicUsize; NUM_BUCKETS], 
+    pub(crate) buckets: Vec<Mutex<Bucket>>,
+    pub active_counts: Vec<AtomicUsize>, 
+    pub config: EngineConfig,
 }
 
 impl EngineState {
-    pub fn new() -> Self {
+    pub fn new(config: EngineConfig) -> Self {
+        let num_buckets = config.num_buckets();
+        
+        let mut buckets = Vec::with_capacity(num_buckets);
+        let mut active_counts = Vec::with_capacity(num_buckets);
+        
+        for _ in 0..num_buckets {
+            buckets.push(Mutex::new(Bucket::new()));
+            active_counts.push(AtomicUsize::new(0));
+        }
+
         Self {
             arena: Mutex::new(Arena::new()),
-            buckets: std::array::from_fn(|_| Mutex::new(Bucket::new())),
-            // ADDED: Initialize active counts to 0
-            active_counts: std::array::from_fn(|_| AtomicUsize::new(0)),
+            buckets,
+            active_counts,
+            config,
         }
     }
 
@@ -33,8 +41,8 @@ impl EngineState {
             arena_guard.insert(player).ok_or("Arena is full")?
         };
 
-        let raw_bucket_index = (mmr / BUCKET_MMR_RANGE) as usize;
-        let target_bucket_index = raw_bucket_index.min(NUM_BUCKETS - 1);
+        let raw_bucket_index = (mmr / self.config.bucket_size) as usize;
+        let target_bucket_index = raw_bucket_index.min(self.config.num_buckets() - 1);
 
         {
             let mut bucket_guard = self.buckets[target_bucket_index]
@@ -50,21 +58,28 @@ impl EngineState {
     }
 }
 
-impl Default for EngineState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
     use std::thread;
 
+    // Helper to generate a default config for tests
+    fn default_test_config() -> EngineConfig {
+        EngineConfig {
+            min_mmr: 0,
+            max_mmr: 5000,
+            bucket_size: 50,
+            max_wait_seconds: 300,
+            max_expansion_radius: 15,
+            decay_acceleration: 0.03,
+            arena_size: 100_000,
+        }
+    }
+
     #[test]
     fn test_bucket_routing() {
-        let state = EngineState::new();
+        let state = EngineState::new(default_test_config());
 
         // Test 1050 MMR routing (1050 / 50 = 21)
         let idx1 = state.add_player(1050).expect("Should add successfully");
@@ -89,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_concurrent_inserts() {
-        let state = Arc::new(EngineState::new());
+        let state = Arc::new(EngineState::new(default_test_config()));
         let mut handles = vec![];
 
         // Spawn 10 threads
