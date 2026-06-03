@@ -1,27 +1,24 @@
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use super::balancer::QueueEvent;
 
-
-// atomics for lock free state on hot paht
 #[derive(Debug)]
 pub struct Player {
+    pub uuid: String,
     pub mmr: u16,
-    pub relaxation_level: AtomicU8,
-    pub is_locked: AtomicBool,
+    pub relaxation_level: u8,
+    pub sender: Option<tokio::sync::oneshot::Sender<QueueEvent>>,
 }
 
 impl Player {
-    // atomics are zeroed/set to false by default.
-    pub fn new(mmr: u16) -> Self {
+    pub fn new(uuid: String, mmr: u16, sender: tokio::sync::oneshot::Sender<QueueEvent>) -> Self {
         Self {
+            uuid,
             mmr,
-            relaxation_level: AtomicU8::new(0),
-            is_locked: AtomicBool::new(false),
+            relaxation_level: 0,
+            sender: Some(sender),
         }
     }
 }
-
-// storing arrena indices only
 
 #[derive(Debug, Default)]
 pub struct Bucket {
@@ -29,7 +26,6 @@ pub struct Bucket {
 }
 
 impl Bucket {
-
     pub fn new() -> Self {
         Self {
             queue: VecDeque::new(),
