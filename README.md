@@ -28,13 +28,81 @@ cargo build --release
 
 ---
 
-## Running the Simulation
+## Running the Live Server
 
-The repository includes a standalone, high-load simulation suite for benchmarking performance and validating edge-case handling.
+Start the production WebSocket server:
+```bash
+cargo run --release --bin real-time-competitive-matchmaker
+```
+The server will bind and listen on ws://127.0.0.1:8080
+
+## WebSocket API Usage
+To interact with the matchmaking server, connect a WebSocket client (like wscat or a frontend interface) to ws://127.0.0.1:8080 and stream standard JSON payloads.
+
+Ingestion Payload (Join Queue):
+```
+{
+  "action": "join_queue",
+  "player_id": "player_1",
+  "mmr": 1500
+}
+```
+
+Successful Match Response:
+When the engine mathematically balances 10 players, it will broadcast a Match Response to all 10 active connections simultaneously:
+
+```
+{
+  "match_id": 1,
+  "team_a": [
+    {"uuid": "player_1", "mmr": 1500},
+    {"uuid": "player_3", "mmr": 1495},
+    ...
+  ],
+  "team_b": [
+    {"uuid": "player_2", "mmr": 1505},
+    ...
+  ]
+}
+```
+
+## Running the Benchmark Suite
+
+The repository includes three standalone, high-load simulation scripts for benchmarking performance and validating edge-case handling.
+1. Arena Stress Test (Peak CPU Throughput)
+
+Bypasses the network to test the absolute raw insertion limits of the LIFO Arena and lock-sharded Mutexes using 8 parallel OS threads.
 
 ```bash
-cargo run --release --bin simulate
+cargo run --release --bin stress_test
 ```
+
+2. Distribution Quality Test (Bell Curve & Time Decay)
+
+Injects 10,000 players adhering to a normal distribution (Bell Curve). This proves the bitmasking algorithm works and that the Time-Decay LUT successfully routes extreme edge-case players out of infinite queues.
+
+```bash
+cargo run --release --bin distribution_test
+```
+
+3. Network Latency Benchmark (Thundering Herd)
+
+A headless client script that establishes 2,000 concurrent WebSockets and releases them all at the exact same millisecond to test Tokio's asynchronous networking layer.
+
+Terminal 1 (Start the server):
+
+```bash
+ulimit -n 100000
+cargo run --release --bin real-time-competitive-matchmaker
+```
+Terminal 2 (Run the benchmark):
+
+```bash
+ulimit -n 100000
+cargo run --release --bin network_benchmark
+```
+
+(Note: The ulimit command prevents Linux from blocking the benchmark due to the default 1024 file descriptor limit).
 
 The suite executes four sequential tests:
 
@@ -46,6 +114,8 @@ The suite executes four sequential tests:
 | 8-Bucket Gap Test | Validates the async Tick Thread and LUT decay logic |
 
 ---
+
+
 
 ## Project Structure
 
